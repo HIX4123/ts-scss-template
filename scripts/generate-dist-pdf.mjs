@@ -60,8 +60,9 @@ function createSymbols(unicodeCapable) {
       treeLast: '\\-- ',
       treePipe: '|   ',
       treeSpace: '    ',
-      indentSpace: '.',
-      indentTab: '->',
+      visibleSpace: '.',
+      visibleTab: '->',
+      indentBoundary: '|',
       continuation: '-> ',
     };
   }
@@ -71,8 +72,9 @@ function createSymbols(unicodeCapable) {
     treeLast: '└── ',
     treePipe: '│   ',
     treeSpace: '    ',
-    indentSpace: '·',
-    indentTab: '→',
+    visibleSpace: '·',
+    visibleTab: '→',
+    indentBoundary: '┆',
     continuation: '↪ ',
   };
 }
@@ -85,7 +87,8 @@ function createStyles(fonts) {
     separator: { color: '#4a4a4a', font: fonts.regular },
     lineNumber: { color: '#666666', font: fonts.regular },
     continuation: { color: '#4d4d4d', font: fonts.regular },
-    indentSpaceMarker: { color: '#b8b8b8', font: fonts.regular },
+    whitespaceMarker: { color: '#b8b8b8', font: fonts.regular },
+    indentBoundary: { color: '#8f8f8f', font: fonts.regular },
     codeDefault: { color: '#111111', font: fonts.regular },
     comment: { color: '#8a8a8a', font: fonts.italic },
     keyword: { color: '#0d0d0d', font: fonts.bold },
@@ -339,26 +342,40 @@ function buildLineCharsFromTokens(rawLine, tokens, styles) {
   return chars;
 }
 
-function visualizeLeadingIndent(chars, symbols, styles) {
-  let index = 0;
-  while (index < chars.length) {
-    const value = chars[index].char;
-    if (value === ' ') {
-      chars[index] = { ...chars[index], char: symbols.indentSpace, style: styles.indentSpaceMarker };
-      index += 1;
+function visualizeWhitespace(chars, symbols, styles, spaceIndentUnit) {
+  const visualizedChars = [];
+  let inLeadingIndent = true;
+  let leadingSpaceCount = 0;
+
+  for (const item of chars) {
+    if (item.char === ' ') {
+      if (inLeadingIndent) {
+        const isIndentBoundary = leadingSpaceCount % spaceIndentUnit === 0;
+        visualizedChars.push({
+          char: isIndentBoundary ? symbols.indentBoundary : symbols.visibleSpace,
+          style: isIndentBoundary ? styles.indentBoundary : styles.whitespaceMarker,
+        });
+        leadingSpaceCount += 1;
+        continue;
+      }
+
+      visualizedChars.push({ char: symbols.visibleSpace, style: styles.whitespaceMarker });
       continue;
     }
 
-    if (value === '\t') {
-      const style = chars[index].style;
-      const replacement = toChars(symbols.indentTab, style);
-      chars.splice(index, 1, ...replacement);
-      index += replacement.length;
+    if (item.char === '\t') {
+      visualizedChars.push(...toChars(symbols.visibleTab, styles.whitespaceMarker));
+      if (inLeadingIndent) {
+        leadingSpaceCount = 0;
+      }
       continue;
     }
 
-    break;
+    inLeadingIndent = false;
+    visualizedChars.push(item);
   }
+
+  return visualizedChars;
 }
 
 function applyBracketDepthEmphasis(chars, stack) {
@@ -515,6 +532,7 @@ function writePlainWrappedLine(renderer, text, lineStyle, styles, symbols) {
 function writeCodeLines(renderer, rawLines, tokenLines, styles, symbols) {
   const bracketStack = [];
   const gutterWidth = String(Math.max(1, rawLines.length)).length;
+  const spaceIndentUnit = detectSpaceIndentUnit(rawLines.join('\n'));
 
   for (const [lineIndex, rawLine] of rawLines.entries()) {
     const lineNumber = String(lineIndex + 1).padStart(gutterWidth, ' ');
@@ -524,9 +542,13 @@ function writeCodeLines(renderer, rawLines, tokenLines, styles, symbols) {
       ...toChars(symbols.continuation, styles.continuation),
     ];
     const tokens = tokenLines?.[lineIndex] ?? [{ content: rawLine, explanation: [] }];
-    const lineChars = buildLineCharsFromTokens(rawLine, tokens, styles);
+    const lineChars = visualizeWhitespace(
+      buildLineCharsFromTokens(rawLine, tokens, styles),
+      symbols,
+      styles,
+      spaceIndentUnit,
+    );
 
-    visualizeLeadingIndent(lineChars, symbols, styles);
     applyBracketDepthEmphasis(lineChars, bracketStack);
 
     const wrappedLines = buildWrappedLines(
